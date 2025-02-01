@@ -1,96 +1,120 @@
-import requests
-import sounddevice as sd
+import pyaudio
+import numpy as np
+import keyboard
+from faster_whisper import WhisperModel
+import threading
 import time
 from collections import deque
-import threading
 
-# Global buffer to store audio chunks
-audio_buffer = deque()
-buffer_lock = threading.Lock()
+# Audio configuration
+FORMAT = pyaudio.paInt16
+CHANNELS = 1
+SAMPLE_RATE = 16000
+CHUNK_SIZE = 1024
+MIN_RECORD_DURATION = 0.3  # 300 milliseconds minimum
+DEBOUNCE_TIME = 0.1  # 100ms
 
-# Flag to signal when playback is complete
-done = threading.Event()
+class VoiceRecorder:
+    def __init__(self):
+        self.audio = pyaudio.PyAudio()
+        self.stream = None
+        self.frames = deque()
+        self.is_recording = False
+        self.lock = threading.Lock()
+        self.model = WhisperModel("large", device="cuda", compute_type="float32")
+        # Or use this for CPU-only:
+        # self.model = WhisperModel("tiny.en", device="cpu", compute_type="int8")
+        self.last_event_time = 0
+        self.transcription = ""
+        self.audio_data = b""
 
-# Function to stream audio in real-time using SoundDevice's RawOutputStream
-def stream_audio(streaming_url, audio_stream, sample_rate=26000):
-    """Streams and plays audio data in real-time."""
-    try:
-        # Fetch the audio stream from the TTS API
-        response = requests.get(streaming_url, stream=True)
-        response.raise_for_status()
-        first_chunk = True
+    def start_recording(self):
+        self.transcription = ""
+        with self.lock:
+            if self.is_recording:
+                return
 
-        print("Streaming audio...")
-        for chunk in response.iter_content(chunk_size=2048):  # Adjust chunk size as needed
-            if first_chunk:
-                first_chunk = False
-            else:
-                if chunk:  # If the chunk contains data
-                    with buffer_lock:
-                        # Add chunk to the global buffer
-                        audio_buffer.append(chunk)
-                        audio_stream.write(chunk)
+            self.frames.clear()
+            self.stream = self.audio.open(
+                format=FORMAT,
+                channels=CHANNELS,
+                rate=SAMPLE_RATE,
+                input=True,
+                frames_per_buffer=CHUNK_SIZE,
+                stream_callback=self.audio_callback,
+                start=False
+            )
+            self.stream.start_stream()
+            self.is_recording = True
+            print("Recording started...")
 
-    except requests.RequestException as e:
-        print(f"Error during audio streaming: {e}")
+    def stop_recording(self):
+        with self.lock:
+            if not self.is_recording:
+                return
 
-# Function to continuously play audio from the global buffer
-def play_audio_from_buffer(sample_rate=26000):
-    """Plays audio in real-time from the buffer while new data is being streamed."""
-    with sd.RawOutputStream(samplerate=sample_rate, channels=1, dtype='int16') as audio_stream:
-        while not done.is_set() or audio_buffer:
-            with buffer_lock:
-                if audio_buffer:
-                    chunk = audio_buffer.popleft()
-                    audio_stream.write(chunk)
-            time.sleep(0.002)  # Prevents excessive CPU usage
+            self.is_recording = False
+            self.stream.stop_stream()
+            self.stream.close()
+            
+            self.audio_data = b''.join(self.frames)
+            if not self.audio_data:
+                print("No audio captured")
+                return
 
-# Function to handle TTS playback sequentially
-# def tts_play(text_array, sample_rate=26000):
-#     voice = "female_01.wav"
-#     output_file = "stream_output.wav"
-#     language = "en"
+            # Calculate actual audio duration
+            duration = len(self.audio_data) / (SAMPLE_RATE * 2)  # 2 bytes per sample
+            if duration < MIN_RECORD_DURATION:
+                print(f"Too short ({duration:.2f}s), ignoring")
+                return
 
-#     # Start the playback thread
-#     play_thread = threading.Thread(target=play_audio_from_buffer, args=(sample_rate,))
-#     play_thread.start()
+            print(f"Processing {duration:.2f}s audio...")
+            # self.process_audio(self.audio_data) # run only in local
+            return self.audio_data
 
-#     # Stream each sentence sequentially (one at a time)
-#     for num, text in enumerate(text_array):
-#         encoded_text = requests.utils.quote(text)
-#         streaming_url = f"http://localhost:7851/api/tts-generate-streaming?text={encoded_text}&voice={voice}&language={language}&output_file={output_file}"
+    def audio_callback(self, in_data, frame_count, time_info, status):
+        self.frames.append(in_data)
+        return (in_data, pyaudio.paContinue)
+
+    def process_audio(self, audio_data):
+        try:
+            audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
+            segments, info = self.model.transcribe(
+                audio_np,
+                language="en",
+                vad_filter=True,
+                beam_size=5
+            )
+            
+            self.transcription = " ".join(segment.text.strip() for segment in segments)
+            print("\nTranscription:", self.transcription)
+            return " ".join(segment.text.strip() for segment in segments)
+        except Exception as e:
+            print(f"Error: {str(e)}")
+
+def key_handler(recorder):
+    def handle_key(event):
+        if event.event_type == keyboard.KEY_DOWN and event.name == 'v':
+            if time.time() - recorder.last_event_time > DEBOUNCE_TIME:
+                recorder.last_event_time = time.time()
+                threading.Thread(target=recorder.start_recording).start()
         
-#         print(f"Playing {num + 1}/{len(text_array)}: {text}")
-#         stream_audio(streaming_url)  # Stream one sentence at a time
+        elif event.event_type == keyboard.KEY_UP and event.name == 'v':
+            recorder.last_event_time = time.time()
+            threading.Thread(target=recorder.stop_recording).start()
 
-#     # Signal that all audio has been streamed
-#     done.set()
-
-#     # Wait for playback to finish
-#     play_thread.join()
-#     print("Finished playing all text.")
-
-def tts_play(text_array, sample_rate=26000):
-    voice = "female_01.wav"
-    output_file = "stream_output.wav"
-    language = "en"
-
-    # Create a persistent RawOutputStream
-    with sd.RawOutputStream(samplerate=sample_rate, channels=1, dtype='int16') as audio_stream:
-        for num, text in enumerate(text_array):
-            encoded_text = requests.utils.quote(text)
-            streaming_url = f"http://localhost:7851/api/tts-generate-streaming?text={encoded_text}&voice={voice}&language={language}&output_file={output_file}"
-            print(f"Playing text {num + 1}/{len(text_array)}: {text}")
-            # Stream audio for the current text
-            stream_audio(streaming_url, audio_stream, sample_rate)
-
+    keyboard.hook(handle_key)
 
 if __name__ == "__main__":
-    # Example text input
-    sample = """ My mother was the most incredible person. She was always so dignified and elegant, always smiling, no matter what situation she might be facing. She had so much to deal with in the clan on so many levels, but she took it all in stride. it was like nothing could ever faze her. Everything about her was perfect, and I say that without exaggerating. *sigh* But the moment she passed away, I realized... I couldn't hide behind my mother any longer. I wasn't little Ayaka any more."""
+    recorder = VoiceRecorder()
+    key_handler(recorder)
     
-    # Split the text into sentences
-    split_text = [sentence.strip() for sentence in sample.replace("\n", " ").split(". ") if sentence.strip()]
+    print("Press & hold 'v' to record. Works in background.")
+    print("Release 'v' to transcribe. Ctrl+C to exit.")
     
-    # Start TTS playback
-    tts_play(split_text)
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("Exiting...")
+        recorder.audio.terminate()
