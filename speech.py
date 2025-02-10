@@ -69,8 +69,8 @@ class VoiceRecorder:
                 return
 
             print(f"Processing {duration:.2f}s audio...")
-            self.process_audio(self.audio_data) # run only in local
-            # return self.audio_data
+            # self.process_audio(self.audio_data) # run only in local
+            return self.audio_data
 
     def audio_callback(self, in_data, frame_count, time_info, status):
         self.frames.append(in_data)
