@@ -97,11 +97,10 @@ async def process_audio(
         }
 
         # Call the TTS API to get a streaming generator of audio data
-        audio_gen = stream_tts_audio(api_url, tts_params)
-        
+        # audio_gen = stream_tts_audio(api_url, tts_params)       
         # Return the audio stream to the client.
         # The client will receive a continuous audio/wav stream.
-        return StreamingResponse(audio_gen, media_type="audio/wav")
+        return StreamingResponse(stream_tts_audio(api_url, tts_params))
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

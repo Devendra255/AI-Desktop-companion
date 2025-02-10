@@ -7,7 +7,7 @@ import speek2
 
 # API endpoint
 # API_URL = "http://localhost:7851/process"
-API_URL = "https://b863-152-58-47-220.ngrok-free.app/"+"process" # ngrok forwarding port 7853
+API_URL = "http://0.0.0.0:7853"+"/process" # ngrok forwarding port 7853
 
 # Audio recording settings
 SAMPLE_RATE = 16000  # 16kHz, matching Whisper's recommended rate
@@ -46,11 +46,10 @@ def send_audio_to_api(audio_buffer):
     files = {"audio": ("recorded_audio.wav", audio_buffer, "audio/wav")}
     response = requests.post(API_URL, files=files)
 
-    if response.status_code == 200:
+    if response.status_code == 200:  
         response.raise_for_status()
         stream_iterator = response.iter_content(chunk_size=1024)
-        for chunk in stream_iterator:
-            speek2.play_audio_stream(chunk)
+        speek2.play_audio_stream(stream_iterator)
 
     else:
         print(f"Error: {response.status_code} - {response.json()['detail']}")
