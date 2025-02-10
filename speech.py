@@ -9,7 +9,7 @@ from collections import deque
 # Audio configuration
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
-SAMPLE_RATE = 16000
+SAMPLE_RATE = 44100
 CHUNK_SIZE = 1024
 MIN_RECORD_DURATION = 0.3  # 300 milliseconds minimum
 DEBOUNCE_TIME = 0.1  # 100ms
@@ -23,7 +23,7 @@ class VoiceRecorder:
         self.lock = threading.Lock()
         self.model = WhisperModel("large", device="cuda", compute_type="float32")
         # Or use this for CPU-only:
-        # self.model = WhisperModel("tiny.en", device="cpu", compute_type="int8")
+        # self.model = WhisperModel("large", device="cpu", compute_type="int8")
         self.last_event_time = 0
         self.transcription = ""
         self.audio_data = b""
@@ -69,8 +69,8 @@ class VoiceRecorder:
                 return
 
             print(f"Processing {duration:.2f}s audio...")
-            # self.process_audio(self.audio_data) # run only in local
-            return self.audio_data
+            self.process_audio(self.audio_data) # run only in local
+            # return self.audio_data
 
     def audio_callback(self, in_data, frame_count, time_info, status):
         self.frames.append(in_data)

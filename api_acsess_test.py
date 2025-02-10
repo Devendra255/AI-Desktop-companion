@@ -3,6 +3,7 @@ import sounddevice as sd
 import numpy as np
 import wave
 import io
+import speek2
 
 # API endpoint
 # API_URL = "http://localhost:7851/process"
@@ -46,10 +47,11 @@ def send_audio_to_api(audio_buffer):
     response = requests.post(API_URL, files=files)
 
     if response.status_code == 200:
-        data = response.json()
-        print(f"\nTranscription: {data['transcription']}")
-        print(f"AI Response: {data['ai_response']}")
-        return data
+        response.raise_for_status()
+        stream_iterator = response.iter_content(chunk_size=1024)
+        for chunk in stream_iterator:
+            speek2.play_audio_stream(chunk)
+
     else:
         print(f"Error: {response.status_code} - {response.json()['detail']}")
 
